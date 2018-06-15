@@ -23,7 +23,8 @@ struct s2p_chunk {
 	unsigned char data[];
 };
 
-/* init: bzero memory */
+/* thread-safety/concurrency: just one reader allowed per buffer. copy buffer using buffer_cpy to create a copy (no allocations) for another reader.
+ * just one writer allowed per buffer. can only create read-only copies of the buffer so the writer must be created on the original buffer struct. */
 struct s2p_buffer {
 	s2p_chunk_t *wchunk; /* wchunk == NULL, rchunk != NULL: read-only */
 	s2p_chunk_t *rchunk;
@@ -130,10 +131,6 @@ int s2p_write_begin(
 		s2p_buffer_t *buffer,
 		s2p_pool_t *pool);
 
-/* returns current write offset relative to begin() */
-size_t s2p_write_tell(
-		s2p_write_t *self);
-
 /* seek to offset relative to begin() */
 int s2p_write_seek(
 		s2p_write_t *self,
@@ -150,6 +147,11 @@ int s2p_write_reserve(
 /* set 'target' and 'remaining' to current position */
 void s2p_write_update(
 		s2p_write_t *self);
+
+/* similar to seek using SEEK_CUR, but: no negative offset and possibility to advance beyond end, i.e. reserve new memory */
+int s2p_write_advance(
+		s2p_write_t *self,
+		size_t size);
 
 /* write_data dependent functions: since they are meant to
  * be called often in succession, the cause the write handler to become dirty.
@@ -210,7 +212,37 @@ int s2p_read_begin(
 		s2p_read_t *self,
 		s2p_buffer_t *buffer);
 
+int s2p_read_seek(
+		s2p_read_t *self,
+		ssize_t off,
+		int whence);
+
 void s2p_read_update(
+		s2p_read_t *self);
+
+void s2p_read_data(
+		s2p_read_t *self,
+		void *di,
+		size_t n);
+
+uint8_t s2p_read_u8(
+		s2p_read_t *self);
+
+uint16_t s2p_read_u16(
+		s2p_read_t *self);
+
+uint32_t s2p_read_u32(
+		s2p_read_t *self);
+
+uint64_t s2p_read_u64(
+		s2p_read_t *self);
+
+/* node: 'self' becomes uninitialized after abort() or commit() */
+void s2p_read_abort(
+		s2p_read_t *self);
+
+/* set rchunk/roff to current position */
+void s2p_read_commit(
 		s2p_read_t *self);
 
 /*int s2p_read_take(

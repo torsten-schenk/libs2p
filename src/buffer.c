@@ -363,11 +363,6 @@ int s2p_write_seek(
 		self->off += cur;
 		pos -= cur;
 		if(self->off == self->chunk->owner->size) {
-			if(!self->chunk->next) {
-				self->chunk->next = self->pool->acquire(self->pool);
-				if(!self->chunk->next)
-					goto error_1;
-			}
 			self->chunk = self->chunk->next;
 			self->off = 0;
 		}
@@ -387,6 +382,41 @@ void s2p_write_update(
 		self->n = self->eoff - self->off;
 	else
 		self->n = self->chunk->owner->size - self->off;
+}
+
+int s2p_write_advance(
+		s2p_write_t *self,
+		size_t size)
+{
+	s2p_chunk_t *chunk = self->chunk;
+	size_t off = self->off;
+	while(size) {
+		size_t cur = S2P_MIN(size, chunk->owner->size - off);
+		self->pos += cur;
+		off += cur;
+		size -= cur;
+		if(off == chunk->owner->size) {
+			if(!chunk->next) {
+				chunk->next = self->pool->acquire(self->pool);
+				if(!chunk->next)
+					goto error_1;
+			}
+			chunk = chunk->next;
+			off = 0;
+		}
+	}
+	self->chunk = chunk;
+	self->off = off;
+	if(self->pos > self->size) {
+		self->size = self->pos;
+		self->echunk = self->chunk;
+		self->eoff = self->off;
+	}
+	s2p_write_update(self);
+	return 0;
+
+error_1:
+	return -1;
 }
 
 int s2p_write_reserve(
@@ -596,7 +626,7 @@ int s2p_write_commit(
 	}
 	self->buffer->wchunk = self->echunk;
 	self->buffer->woff = self->eoff;
-	__atomic_fetch_add(&self->buffer->fill, self->size, __ATOMIC_SEQ_CST);
+	__atomic_fetch_add(&self->buffer->fill, self->size, __ATOMIC_ACQ_REL);
 	return 0;
 }
 
@@ -606,7 +636,7 @@ int s2p_read_begin(
 {
 	memset(self, 0, sizeof(s2p_read_t));
 	self->buffer = buffer;
-	self->size = __atomic_load_n(&buffer->fill, __ATOMIC_SEQ_CST);
+	self->size = __atomic_load_n(&buffer->fill, __ATOMIC_ACQUIRE);
 	self->chunk = self->buffer->rchunk;
 	self->off = self->buffer->roff;
 	s2p_read_update(self);
@@ -614,17 +644,158 @@ int s2p_read_begin(
 	return 0;
 }
 
+int s2p_read_seek(
+		s2p_read_t *self,
+		ssize_t rel,
+		int whence)
+{
+	size_t pos;
+	switch(whence) {
+		case SEEK_SET: pos = rel; break;
+		case SEEK_CUR: pos = rel + self->pos; break;
+		case SEEK_END: pos = rel + self->size; break;
+		default: errno = EINVAL; return -1;
+	}
+	if(pos > self->size) {
+		errno = EOVERFLOW;
+		goto error_1;
+	}
+	else if(self->chunk == self->buffer->rchunk) { /* we are in the beginning chunk, so do start at the very beginning */
+		self->pos = 0;
+		self->off = self->buffer->roff;
+	}
+	else if(pos < self->pos - self->off) { /* we must start at the very beginning */
+		self->chunk = self->buffer->rchunk;
+		self->off = self->buffer->roff;
+		self->pos = 0;
+	}
+	else { /* we can start at current position */
+		self->pos -= self->off;
+		self->off = 0;
+		pos -= self->pos;
+	}
+	while(pos) {
+		size_t cur = S2P_MIN(pos, self->chunk->owner->size - self->off);
+		self->pos += cur;
+		self->off += cur;
+		pos -= cur;
+		if(self->off == self->chunk->owner->size) {
+			self->chunk = self->chunk->next;
+			self->off = 0;
+		}
+	}
+	s2p_read_update(self);
+	return 0;
+
+error_1:
+	return -1;
+}
+
 void s2p_read_update(
 		s2p_read_t *self)
 {
 	if(self->chunk) {
 		self->si = self->chunk->data + self->off;
-//		self->n = 
+		self->n = S2P_MIN(self->size - self->pos, self->chunk->owner->size - self->off);
 	}
 	else {
 		self->si = NULL;
 		self->n = 0;
 	}
+}
+
+void s2p_read_data(
+		s2p_read_t *self,
+		void *di,
+		size_t n)
+{
+	s2p_chunk_t *chunk = self->chunk;
+	size_t off = self->off;
+	size_t total = n;
+	const unsigned char *si = chunk->data + off;
+	if(self->error || !total)
+		return;
+	else if(total > self->size - self->pos) {
+		self->error = EOVERFLOW;
+		return;
+	}
+	while(n) {
+		size_t cur = S2P_MIN(n, chunk->owner->size - off);
+		memcpy(di, si, cur);
+		si += cur;
+		off += cur;
+		n -= cur;
+		di += cur;
+		if(off == chunk->owner->size) {
+			chunk = chunk->next;
+			off = 0;
+			si = chunk->data;
+		}
+	}
+	self->chunk = chunk;
+	self->off = off;
+	self->pos += total;
+}
+
+uint8_t s2p_read_u8(
+		s2p_read_t *self)
+{
+	uint8_t v;
+	s2p_read_data(self, &v, 1);
+	return v;
+}
+
+uint16_t s2p_read_u16(
+		s2p_read_t *self)
+{
+	uint16_t v;
+	s2p_read_data(self, &v, 2);
+	return be16toh(v);
+}
+
+uint32_t s2p_read_u32(
+		s2p_read_t *self)
+{
+	uint32_t v;
+	s2p_read_data(self, &v, 4);
+	return be32toh(v);
+}
+
+uint64_t s2p_read_u64(
+		s2p_read_t *self)
+{
+	uint64_t v;
+	s2p_read_data(self, &v, 8);
+	return be64toh(v);
+}
+
+void s2p_read_abort(
+		s2p_read_t *self)
+{
+	(void)self;
+}
+
+/* TODO improve atomic stuff */
+void s2p_read_commit(
+		s2p_read_t *self)
+{
+	size_t pos = self->pos;
+	s2p_chunk_t *chunk = self->buffer->rchunk;
+	size_t off = self->buffer->roff;
+	while(pos) {
+		size_t cur = S2P_MIN(pos, chunk->owner->size - off);
+		pos -= cur;
+		off += cur;
+		if(off == chunk->owner->size) {
+			s2p_chunk_t *prev = chunk;
+			chunk = chunk->next;
+			off = 0;
+			s2p_chunk_unref(prev);
+		}
+	}
+	self->buffer->rchunk = chunk;
+	self->buffer->roff = off;
+	__atomic_fetch_sub(&self->buffer->fill, pos, __ATOMIC_ACQ_REL);
 }
 
 #ifdef TESTING
