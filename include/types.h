@@ -94,18 +94,15 @@ enum {
 	S2P_BUFFER_FILL_MASK = 0x03
 };
 
-/* while a read/write is active, just the const self functions may be used. */
-void s2p_buffer_reset(
+void s2p_buffer_init(
 		s2p_buffer_t *self);
 
-/* make a read-only copy of the buffer; 'self' is expected to be uninitialized
- * there must be no read handler active for 'other' */
-void s2p_buffer_cpy(
-		s2p_buffer_t *self,
-		const s2p_buffer_t *other);
+/* while a read/write is active, just the const self functions may be used. */
+void s2p_buffer_destroy(
+		s2p_buffer_t *self);
 
 /* make a read-only copy of the buffer; 'self' is expected to be uninitialized */
-void s2p_buffer_ncpy(
+void s2p_buffer_cpy(
 		s2p_buffer_t *self,
 		const s2p_buffer_t *other,
 		ssize_t n);
@@ -118,7 +115,8 @@ int s2p_buffer_cmp_data(
 
 int s2p_buffer_cmp(
 		const s2p_buffer_t *self,
-		const s2p_buffer_t *other);
+		const s2p_buffer_t *other,
+		ssize_t n);
 
 size_t s2p_buffer_available(
 		const s2p_buffer_t *self);
@@ -142,7 +140,8 @@ int s2p_write_seek(
 		ssize_t off,
 		int whence);
 
-/* reserve 'size' from offset relative to 'whence' */
+/* reserve 'size' from offset relative to 'whence'
+ * if 'size' is <= already available size, function call is nop */
 int s2p_write_reserve(
 		s2p_write_t *self,
 		size_t size,
@@ -152,19 +151,17 @@ int s2p_write_reserve(
 void s2p_write_update(
 		s2p_write_t *self);
 
-/* advance current pointer by 'n'; cannot advance beyond end
- * NOTE: s2p_write_update() required after following functions have been used! */
-
-int s2p_write_advance(
-		s2p_write_t *self,
-		size_t n);
-
 /* write_data dependent functions: since they are meant to
  * be called often in succession, the cause the write handler to become dirty.
  * s2p_write_update() must be called to update self->di.
  * it also uses self->error to indicate any error occured during a write sequence.
  * when write sequence is done, caller may use write_done() to clean the handler again
  * and retrieve a possible error. */
+
+void s2p_write_set(
+		s2p_write_t *self,
+		char c,
+		size_t n);
 
 void s2p_write_data(
 		s2p_write_t *self,

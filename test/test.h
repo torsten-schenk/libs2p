@@ -3,6 +3,8 @@
 #include <CUnit/Basic.h>
 #include <stdbool.h>
 
+#include "hexdump.h"
+
 #define ADD_TEST(NAME, FN) \
 	do {\
 		test = CU_add_test(suite, NAME, FN); \

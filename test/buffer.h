@@ -99,6 +99,39 @@ static void make_buffer(
 	}
 }
 
+static void update_buffer(
+		s2p_buffer_t *self,
+		const char *string)
+{
+	size_t n = strlen(string);
+	size_t off = self->roff;
+	s2p_chunk_t *chunk = self->rchunk;
+	CU_ASSERT_EQUAL(n, self->fill);
+
+	while(n) {
+		size_t cur = S2P_MIN(n, chunk->owner->size - off);
+		memcpy(chunk->data + off, string, cur);
+		string += cur;
+		off = 0;
+		chunk = chunk->next;
+		n -= cur;
+	}
+}
+
+static void dump_buffer(
+		const s2p_buffer_t *self)
+{
+	s2p_chunk_t *c;
+	printf("----------------------------------------- BUFFER DUMP -----------------------------------------\n");
+	printf("rchunk=%p roff=%zu wchunk=%p woff=%zu fill=%zu\n", self->rchunk, self->roff, self->wchunk, self->woff, self->fill);
+
+	for(c = self->rchunk; c; c = c->next) {
+		printf("\nchunk %p: owner=%p size=%zu next=%p\n", c, c->owner, c->owner->size, c->next);
+		hexdump(c->data, c->owner->size);
+	}
+	printf("-----------------------------------------------------------------------------------------------\n");
+}
+
 static void destroy_buffer(
 		s2p_buffer_t *self)
 {
@@ -190,6 +223,8 @@ static void test0_make_buffer()
 	CU_ASSERT_EQUAL(buffer.roff, 0);
 	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->data + 0, "1234", 4), 0);
 	CU_ASSERT_EQUAL(s2p_buffer_status(&buffer), S2P_BUFFER_NOT_EMPTY | S2P_BUFFER_RDONLY);
+	update_buffer(&buffer, "4321");
+	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->data + 0, "4321", 4), 0);
 	destroy_buffer(&buffer);
 	CU_ASSERT_EQUAL(pool->n_alloc, 0);
 
@@ -246,6 +281,9 @@ static void test0_make_buffer()
 	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->data + 4, "123", 3), 0);
 	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->next->data + 0, "4", 1), 0);
 	CU_ASSERT_EQUAL(s2p_buffer_status(&buffer), S2P_BUFFER_NOT_EMPTY | S2P_BUFFER_RDONLY);
+	update_buffer(&buffer, "4321");
+	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->data + 4, "432", 3), 0);
+	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->next->data + 0, "1", 1), 0);
 	destroy_buffer(&buffer);
 	CU_ASSERT_EQUAL(pool->n_alloc, 0);
 
@@ -258,6 +296,10 @@ static void test0_make_buffer()
 	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->next->data + 0, "456789a", 7), 0);
 	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->next->next->data + 0, "bcdef", 5), 0);
 	CU_ASSERT_EQUAL(s2p_buffer_status(&buffer), S2P_BUFFER_NOT_EMPTY | S2P_BUFFER_RDONLY);
+	update_buffer(&buffer, "fedcba987654321");
+	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->data + 4, "fed", 3), 0);
+	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->next->data + 0, "cba9876", 7), 0);
+	CU_ASSERT_EQUAL(memcmp(buffer.rchunk->next->next->data + 0, "54321", 5), 0);
 	destroy_buffer(&buffer);
 	CU_ASSERT_EQUAL(pool->n_alloc, 0);
 
@@ -287,9 +329,219 @@ static int test1_cleanup()
 	return CUE_SUCCESS;
 }
 
-static void test1_copy1()
+static void test1_cpy()
+{
+	s2p_buffer_t source;
+	s2p_buffer_t target;
+
+	/* start at offset 0 and use 1 full chunk (rw) */
+	make_buffer(&source, pool4, 0, "1234", false);
+	s2p_buffer_cpy(&target, &source, -1);
+	CU_ASSERT_PTR_NULL(target.wchunk);
+	CU_ASSERT_PTR_EQUAL(target.rchunk, source.rchunk);
+	CU_ASSERT_PTR_EQUAL(target.roff, source.roff);
+	CU_ASSERT_EQUAL(source.fill, target.fill);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 2);
+	CU_ASSERT_EQUAL(target.rchunk->next->refcnt, 1);
+
+	s2p_buffer_destroy(&target);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 1);
+	CU_ASSERT_EQUAL(target.rchunk->next->refcnt, 1);
+	s2p_buffer_destroy(&source);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 0);
+
+	/* start at offset 0 and use 1 full chunk (ro) */
+	make_buffer(&source, pool4, 0, "1234", true);
+	s2p_buffer_cpy(&target, &source, -1);
+	CU_ASSERT_PTR_NULL(target.wchunk);
+	CU_ASSERT_PTR_EQUAL(target.rchunk, source.rchunk);
+	CU_ASSERT_PTR_EQUAL(target.roff, source.roff);
+	CU_ASSERT_EQUAL(source.fill, target.fill);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 1);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 2);
+
+	s2p_buffer_destroy(&target);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 1);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 1);
+	s2p_buffer_destroy(&source);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 0);
+
+	/* start at offset 2 and use 2 chunks (rw) */
+	make_buffer(&source, pool4, 2, "1234", false);
+	s2p_buffer_cpy(&target, &source, -1);
+	CU_ASSERT_PTR_NULL(target.wchunk);
+	CU_ASSERT_PTR_EQUAL(target.rchunk, source.rchunk);
+	CU_ASSERT_PTR_EQUAL(target.roff, source.roff);
+	CU_ASSERT_EQUAL(source.fill, target.fill);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 2);
+	CU_ASSERT_EQUAL(target.rchunk->next->refcnt, 2);
+
+	s2p_buffer_destroy(&target);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 1);
+	CU_ASSERT_EQUAL(target.rchunk->next->refcnt, 1);
+	s2p_buffer_destroy(&source);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 0);
+
+	/* start at offset 2 and use 2 chunks (ro) */
+	make_buffer(&source, pool4, 2, "1234", true);
+	s2p_buffer_cpy(&target, &source, -1);
+	CU_ASSERT_PTR_NULL(target.wchunk);
+	CU_ASSERT_PTR_EQUAL(target.rchunk, source.rchunk);
+	CU_ASSERT_PTR_EQUAL(target.roff, source.roff);
+	CU_ASSERT_EQUAL(source.fill, target.fill);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 2);
+	CU_ASSERT_EQUAL(target.rchunk->next->refcnt, 2);
+
+	s2p_buffer_destroy(&target);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	CU_ASSERT_EQUAL(target.rchunk->refcnt, 1);
+	CU_ASSERT_EQUAL(target.rchunk->next->refcnt, 1);
+	s2p_buffer_destroy(&source);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 0);
+}
+
+static void test1_cmp_data()
+{
+	s2p_buffer_t a;
+
+	make_buffer(&a, pool4, 2, "12345678", false);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12345678", 8), 0);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "1234567", 7), 0);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "1234", 4), 0);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "123", 3), 0);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12", 2), 0);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "", 0), 0);
+
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "02345678", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "10345678", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12045678", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12305678", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12340678", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12345078", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12345608", 8), 1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12345670", 8), 1);
+
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "a2345678", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "1a345678", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12a45678", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "123a5678", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "1234a678", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "12345a78", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "123456a8", 8), -1);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp_data(&a, "1234567a", 8), -1);
+
+	s2p_buffer_destroy(&a);
+}
+
+static void test1_cmp()
+{
+	s2p_buffer_t a;
+	s2p_buffer_t b;
+	char seq[27];
+	int i;
+
+	strcpy(seq, "abcdefghijklmnopqrstuvwxyz");
+	make_buffer(&a, pool4, 2, seq, true);
+	make_buffer(&b, pool7, 4, seq, true);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp(&a, &b, -1), 0);
+	CU_ASSERT_EQUAL(s2p_buffer_cmp(&b, &a, -1), 0);
+	for(i = 0; i < 26; i++) {
+		char c = seq[i];
+		seq[i] = ' ';
+		update_buffer(&a, seq);
+		CU_ASSERT_EQUAL(s2p_buffer_cmp(&a, &b, -1), -1);
+		CU_ASSERT_EQUAL(s2p_buffer_cmp(&b, &a, -1), 1);
+		seq[i] = c;
+		update_buffer(&a, seq);
+
+		seq[i] = ' ';
+		update_buffer(&b, seq);
+		CU_ASSERT_EQUAL(s2p_buffer_cmp(&a, &b, -1), 1);
+		CU_ASSERT_EQUAL(s2p_buffer_cmp(&b, &a, -1), -1);
+		seq[i] = c;
+		update_buffer(&b, seq);
+	}
+
+	s2p_buffer_destroy(&b);
+	s2p_buffer_destroy(&a);
+}
+
+static int test2_init()
+{
+	pool4 = testpool_new(4);
+	if(!pool4)
+		goto error_1;
+	pool7 = testpool_new(7);
+	if(!pool7)
+		goto error_2;
+	return CUE_SUCCESS;
+
+error_2:
+	testpool_destroy(pool4);
+error_1:
+	return CUE_SINIT_FAILED;
+}
+
+static int test2_cleanup()
+{
+	testpool_destroy(pool7);
+	testpool_destroy(pool4);
+	return CUE_SUCCESS;
+}
+
+static void test2_begin()
 {
 	s2p_buffer_t buffer;
+	s2p_write_t write;
+
+	/* read-only buffer */
+	make_buffer(&buffer, pool7, 0, "1", true);
+	CU_ASSERT_EQUAL(s2p_write_begin(&write, &buffer, pool7), -1);
+	CU_ASSERT_EQUAL(errno, EACCES);
+	destroy_buffer(&buffer);
+
+	/* null buffer */
+	s2p_buffer_init(&buffer);
+	CU_ASSERT_EQUAL(s2p_write_begin(&write, &buffer, pool7), 0);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 1);
+	destroy_buffer(&buffer);
+
+	/* read-write buffer */
+	make_buffer(&buffer, pool7, 0, "1", false);
+	CU_ASSERT_EQUAL(s2p_write_begin(&write, &buffer, pool7), 0);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 1);
+	destroy_buffer(&buffer);
+}
+
+static void test2_reserve()
+{
+	s2p_buffer_t buffer;
+	s2p_write_t write;
+
+	make_buffer(&buffer, pool4, 2, "123", false);
+	s2p_write_begin(&write, &buffer, pool4);
+	CU_ASSERT_EQUAL(write.eoff, 1);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+	
+	s2p_write_reserve(&write, 2, SEEK_SET);
+	CU_ASSERT_EQUAL(write.size, 2);
+	CU_ASSERT_EQUAL(write.eoff, 3);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 2);
+
+	s2p_write_reserve(&write, 3, SEEK_SET);
+	CU_ASSERT_EQUAL(write.size, 3);
+	CU_ASSERT_EQUAL(write.eoff, 0);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 3);
+
+	s2p_write_reserve(&write, 5, SEEK_END);
+	CU_ASSERT_EQUAL(write.size, 8);
+	CU_ASSERT_EQUAL(write.eoff, 1);
+	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 4);
 }
 
 static int setup_tests()
@@ -302,7 +554,13 @@ static int setup_tests()
 		ADD_TEST("make buffer + basic library functions", test0_make_buffer);
 	END_SUITE;
 	BEGIN_SUITE("Buffer functions", test1_init, test1_cleanup);
-		ADD_TEST("copy buffer", test1_copy1);
+		ADD_TEST("s2p_buffer_cpy", test1_cpy);
+		ADD_TEST("s2p_buffer_cmp_data", test1_cmp_data);
+		ADD_TEST("s2p_buffer_cmp", test1_cmp);
+	END_SUITE;
+	BEGIN_SUITE("Buffer write", test2_init, test2_cleanup);
+		ADD_TEST("s2p_write_begin", test2_begin);
+		ADD_TEST("s2p_write_reserve", test2_reserve);
 	END_SUITE;
 
 	return CUE_SUCCESS;

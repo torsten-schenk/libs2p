@@ -57,7 +57,13 @@ error_1:
 	return NULL;
 }
 
-void s2p_buffer_reset(
+void s2p_buffer_init(
+		s2p_buffer_t *self)
+{
+	memset(self, 0, sizeof(s2p_buffer_t));
+}
+
+void s2p_buffer_destroy(
 		s2p_buffer_t *self)
 {
 	size_t fill = __atomic_load_n(&self->fill, __ATOMIC_SEQ_CST);
@@ -66,21 +72,20 @@ void s2p_buffer_reset(
 	if(!cur)
 		return;
 	else if(!fill) /* buffer is empty (i.e. not null), so we have a ref'ed chunk but no fill */
-		cur->owner->release(cur);
+		s2p_chunk_unref(cur);
 	else if(!self->woff) /* buffer is not empty and the write chunk is currently at offset 0, which means that it will never be treated by the following while loop. */
-		cur->owner->release(self->wchunk);
+		s2p_chunk_unref(self->wchunk);
 	while(fill) {
 		s2p_chunk_t *prev = cur;
 		size_t n = S2P_MIN(fill, cur->owner->size - roff);
 		fill -= n;
 		roff = 0;
 		cur = cur->next;
-		prev->owner->release(prev);
+		s2p_chunk_unref(prev);
 	}
-	memset(self, 0, sizeof(s2p_buffer_t));
 }
 
-void s2p_buffer_cpy(
+/*void s2p_buffer_cpy(
 		s2p_buffer_t *self,
 		const s2p_buffer_t *other)
 {
@@ -106,9 +111,9 @@ void s2p_buffer_cpy(
 		chunk = chunk->next;
 	}
 	__atomic_store_n(&self->fill, total, __ATOMIC_SEQ_CST);
-}
+}*/
 
-void s2p_buffer_ncpy(
+void s2p_buffer_cpy(
 		s2p_buffer_t *self,
 		const s2p_buffer_t *other,
 		ssize_t bytes)
@@ -121,7 +126,7 @@ void s2p_buffer_ncpy(
 	memset(self, 0, sizeof(s2p_buffer_t));
 	if(!other || s2p_buffer_status(other) == S2P_BUFFER_NULL)
 		return;
-	total = __atomic_load_n(&other->fill, __ATOMIC_SEQ_CST);
+	total = __atomic_load_n(&other->fill, __ATOMIC_ACQUIRE);
 	if(bytes >= 0)
 		total = S2P_MIN(total, (size_t)bytes);
 	n = total;
@@ -147,32 +152,29 @@ int s2p_buffer_cmp_data(
 	const char *si = data;
 	size_t off = self->roff;
 	size_t fill = __atomic_load_n(&self->fill, __ATOMIC_SEQ_CST);
-	size_t total = S2P_MIN(fill, size);
-	s2p_chunk_t *c;
+	size_t n = S2P_MIN(fill, size);
+	s2p_chunk_t *c = self->rchunk;
 
-	for(c = self->rchunk; c; c = c->next) {
+	while(n) {
 		int cmp;
-		size_t cur = S2P_MIN(c->owner->size - off, total);
+		size_t cur = S2P_MIN(c->owner->size - off, n);
 		cmp = memcmp(c->data + off, si, cur);
 		if(cmp < 0)
 			return -1;
 		else if(cmp > 0)
 			return 1;
-		total -= cur;
+		n -= cur;
 		si += cur;
 		off = 0;
+		c = c->next;
 	}
-	if(fill < size)
-		return -1;
-	else if(fill > size)
-		return 1;
-	else
-		return 0;
+	return 0;
 }
 
 int s2p_buffer_cmp(
 		const s2p_buffer_t *self,
-		const s2p_buffer_t *other)
+		const s2p_buffer_t *other,
+		ssize_t n)
 {
 	s2p_chunk_t *ca = self->rchunk;
 	s2p_chunk_t *cb = other->rchunk;
@@ -180,9 +182,11 @@ int s2p_buffer_cmp(
 	size_t sizeb;
 	size_t offa = self->roff;
 	size_t offb = other->roff;
-	size_t total = S2P_MIN(offa, offb);
 	size_t sfill = __atomic_load_n(&self->fill, __ATOMIC_SEQ_CST);
 	size_t ofill = __atomic_load_n(&other->fill, __ATOMIC_SEQ_CST);
+	size_t total = S2P_MIN(sfill, ofill);
+	if(n >= 0)
+		total = S2P_MIN(total, (size_t)n);
 
 	if(!total)
 		return 0;
@@ -249,7 +253,7 @@ size_t s2p_buffer_available(
 		const s2p_buffer_t *self)
 {
 	if(self)
-		return __atomic_load_n(&self->fill, __ATOMIC_SEQ_CST);
+		return __atomic_load_n(&self->fill, __ATOMIC_ACQUIRE);
 	else
 		return 0;
 }
@@ -281,19 +285,21 @@ int s2p_write_begin(
 		s2p_pool_t *pool)
 {
 	int status = s2p_buffer_status(buffer);
-	memset(self, 0, sizeof(s2p_write_t));
 
 	if(status == S2P_BUFFER_NULL) {
 		buffer->rchunk = pool->acquire(pool);
 		if(!buffer->rchunk)
 			goto error_1;
+		buffer->roff = 0;
 		buffer->wchunk = buffer->rchunk;
+		buffer->woff = 0;
 	}
 	else if(status & S2P_BUFFER_RDONLY) {
 		errno = EACCES;
 		goto error_1;
 	}
 
+	memset(self, 0, sizeof(s2p_write_t));
 	self->buffer = buffer;
 	self->pool = pool;
 	self->chunk = buffer->wchunk;
@@ -310,14 +316,14 @@ error_1:
 /* seek to offset relative to begin() */
 int s2p_write_seek(
 		s2p_write_t *self,
-		ssize_t off,
+		ssize_t rel,
 		int whence)
 {
 	size_t pos;
 	switch(whence) {
-		case SEEK_SET: pos = off; break;
-		case SEEK_CUR: pos = off + self->pos; break;
-		case SEEK_END: pos = off + self->size; break;
+		case SEEK_SET: pos = rel; break;
+		case SEEK_CUR: pos = rel + self->pos; break;
+		case SEEK_END: pos = rel + self->size; break;
 		default: errno = EINVAL; return -1;
 	}
 	if(pos > self->size) {
@@ -351,17 +357,27 @@ int s2p_write_seek(
 		self->off = 0;
 		pos -= self->pos;
 	}
-	return s2p_write_advance(self, pos);
+	while(pos) {
+		size_t cur = S2P_MIN(pos, self->chunk->owner->size - self->off);
+		self->pos += cur;
+		self->off += cur;
+		pos -= cur;
+		if(self->off == self->chunk->owner->size) {
+			if(!self->chunk->next) {
+				self->chunk->next = self->pool->acquire(self->pool);
+				if(!self->chunk->next)
+					goto error_1;
+			}
+			self->chunk = self->chunk->next;
+			self->off = 0;
+		}
+	}
+	s2p_write_update(self);
+	return 0;
 
 error_1:
 	return -1;
 }
-
-/* reserve 'size' from offset relative to 'whence' */
-int s2p_write_reserve(
-		s2p_write_t *self,
-		size_t size,
-		int whence);
 
 void s2p_write_update(
 		s2p_write_t *self)
@@ -371,6 +387,43 @@ void s2p_write_update(
 		self->n = self->eoff - self->off;
 	else
 		self->n = self->chunk->owner->size - self->off;
+}
+
+int s2p_write_reserve(
+		s2p_write_t *self,
+		size_t size,
+		int whence)
+{
+	size_t pos;
+	switch(whence) {
+		case SEEK_SET: pos = size; break;
+		case SEEK_CUR: pos = size + self->pos; break;
+		case SEEK_END: pos = size + self->size; break;
+		default: errno = EINVAL; return -1;
+	}
+	if(pos <= self->size)
+		return 0;
+	pos -= self->size;
+	while(pos) {
+		size_t cur = S2P_MIN(pos, self->echunk->owner->size - self->eoff);
+		self->size += cur;
+		self->eoff += cur;
+		pos -= cur;
+		if(self->eoff == self->echunk->owner->size) {
+			if(!self->echunk->next) {
+				self->echunk->next = self->pool->acquire(self->pool);
+				if(!self->echunk->next)
+					goto error_1;
+			}
+			self->echunk = self->echunk->next;
+			self->eoff = 0;
+		}
+	}
+	s2p_write_update(self);
+	return 0;
+
+error_1:
+	return -1;
 }
 
 int s2p_write_advance(
