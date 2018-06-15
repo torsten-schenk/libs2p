@@ -622,8 +622,30 @@ static void assert_wpos(
 	}
 	CU_ASSERT_PTR_EQUAL(self->chunk, chunk);
 	CU_ASSERT_EQUAL(self->off, off);
-	CU_ASSERT_PTR_EQUAL(self->di, chunk->data + off);
+	s2p_write_update(self);
 	CU_ASSERT_EQUAL(self->n, S2P_MIN(self->size - self->pos, chunk->owner->size - off));
+	CU_ASSERT_PTR_EQUAL(self->di, chunk->data + off);
+}
+
+static void assert_chunk_data(
+		s2p_chunk_t *chunk,
+		...)
+{
+	va_list ap;
+	const char *data;
+	size_t i;
+	va_start(ap, chunk);
+	for(;;) {
+		data = va_arg(ap, const char*);
+		if(!data)
+			break;
+		CU_ASSERT_PTR_NOT_NULL_FATAL(chunk);
+		for(i = 0; i < chunk->owner->size; i++) {
+			CU_ASSERT(data[i] == ' ' || data[i] == chunk->data[i]);
+		}
+		chunk = chunk->next;
+	}
+	va_end(ap);
 }
 
 static void test2_seek()
@@ -727,6 +749,64 @@ static void test2_seek()
 	destroy_buffer(&buffer);
 }
 
+static void test2_data()
+{
+	s2p_buffer_t buffer;
+	s2p_write_t write;
+
+	make_buffer(&buffer, pool7, 1, "ab", false);
+	s2p_write_begin(&write, &buffer, pool7);
+
+	/* case: |-RR[wu]w--|*/
+	s2p_write_str(&write, "01");
+	CU_ASSERT_EQUAL(write.error, 0);
+	CU_ASSERT_EQUAL(write.size, 2);
+	assert_wpos(&write, 2);
+	assert_chunk_data(buffer.rchunk, " ab01  ", NULL);
+	s2p_write_str(&write, "23");
+	assert_chunk_data(buffer.rchunk, " ab0123", "       ", NULL);
+	s2p_write_str(&write, "4567");
+	CU_ASSERT_EQUAL(write.size, 8);
+	assert_wpos(&write, 8);
+	assert_chunk_data(buffer.rchunk, " ab0123", "4567   ", NULL);
+	s2p_write_str(&write, "89abcdef");
+	CU_ASSERT_EQUAL(write.size, 16);
+	assert_wpos(&write, 16);
+	assert_chunk_data(buffer.rchunk, " ab0123", "456789a", "bcdef  ", NULL);
+	s2p_write_str(&write, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+	CU_ASSERT_EQUAL(write.size, 42);
+	assert_wpos(&write, 42);
+	assert_chunk_data(buffer.rchunk, " ab0123", "456789a", "bcdefAB", "CDEFGHI", "JKLMNOP", "QRSTUVW", "XYZ    ", NULL);
+
+	s2p_write_seek(&write, 3, SEEK_SET);
+	s2p_write_str(&write, "[]");
+	CU_ASSERT_EQUAL(write.size, 42);
+	assert_wpos(&write, 5);
+	assert_chunk_data(buffer.rchunk, " ab012[", "]56789a", "bcdefAB", "CDEFGHI", "JKLMNOP", "QRSTUVW", "XYZ    ", NULL);
+
+	s2p_write_seek(&write, 4, SEEK_SET);
+	s2p_write_u8(&write, 0x67);
+	assert_wpos(&write, 5);
+	s2p_write_u16(&write, 0x6869);
+	assert_wpos(&write, 7);
+	s2p_write_u32(&write, 0x6a6b6c6d);
+	assert_wpos(&write, 11);
+	s2p_write_u64(&write, 0x6e6f707172737475);
+	assert_wpos(&write, 19);
+
+	assert_chunk_data(buffer.rchunk, " ab012[", "ghijklm", "nopqrst", "uDEFGHI", "JKLMNOP", "QRSTUVW", "XYZ    ", NULL);
+
+	s2p_write_seek(&write, 4, SEEK_SET);
+	s2p_write_set(&write, 0x2e, 24);
+	CU_ASSERT_EQUAL(write.size, 42);
+	assert_wpos(&write, 28);
+
+	s2p_write_set(&write, 0x2d, 20);
+	CU_ASSERT_EQUAL(write.size, 48);
+	assert_wpos(&write, 48);
+	assert_chunk_data(buffer.rchunk, " ab012[", ".......", ".......", ".......", "...----", "-------", "-------", "--     ", NULL);
+}
+
 static int setup_tests()
 {
 	CU_pSuite suite;
@@ -747,6 +827,7 @@ static int setup_tests()
 		ADD_TEST("s2p_write_abort", test2_abort);
 		ADD_TEST("s2p_write_commit", test2_commit);
 		ADD_TEST("s2p_write_seek + implicit s2p_write_update", test2_seek);
+		ADD_TEST("s2p_write_set + s2p_write_data + s2p_write_done", test2_data);
 	END_SUITE;
 
 	return CUE_SUCCESS;

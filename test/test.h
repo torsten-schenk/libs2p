@@ -2,6 +2,7 @@
 
 #include <CUnit/Basic.h>
 #include <stdbool.h>
+#include <stdarg.h>
 
 #include "hexdump.h"
 

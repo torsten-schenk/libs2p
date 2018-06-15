@@ -426,34 +426,44 @@ error_1:
 	return -1;
 }
 
-int s2p_write_advance(
+void s2p_write_set(
 		s2p_write_t *self,
+		char c,
 		size_t n)
 {
-	if(self->pos + n > self->size) {
-		errno = EOVERFLOW;
-		goto error_1;
-	}
+	s2p_chunk_t *chunk = self->chunk;
+	size_t off = self->off;
+	size_t total = n;
+	unsigned char *di = chunk->data + off;
+	if(self->error || !total)
+		return;
 	while(n) {
-		size_t cur = S2P_MIN(n, self->chunk->owner->size - self->off);
-		self->pos += cur;
-		self->off += cur;
+		size_t cur = S2P_MIN(n, chunk->owner->size - off);
+		memset(di, c, cur);
+		off += cur;
 		n -= cur;
-		if(self->off == self->chunk->owner->size) {
-			if(!self->chunk->next) {
-				self->chunk->next = self->pool->acquire(self->pool);
-				if(!self->chunk->next)
-					goto error_1;
+		di += cur;
+		if(off == chunk->owner->size) {
+			if(!chunk->next) {
+				chunk->next = self->pool->acquire(self->pool);
+				if(!chunk->next) {
+					self->error = errno;
+					return;
+				}
 			}
-			self->chunk = self->chunk->next;
-			self->off = 0;
+			chunk = chunk->next;
+			off = 0;
+			di = chunk->data;
 		}
 	}
-	s2p_write_update(self);
-	return 0;
-
-error_1:
-	return -1;
+	self->chunk = chunk;
+	self->off = off;
+	self->pos += total;
+	if(self->size < self->pos) { /* we wrote beyond current end position */
+		self->size = self->pos;
+		self->eoff = off;
+		self->echunk = chunk;
+	}
 }
 
 void s2p_write_data(
@@ -490,6 +500,11 @@ void s2p_write_data(
 	self->chunk = chunk;
 	self->off = off;
 	self->pos += total;
+	if(self->size < self->pos) { /* we wrote beyond current end position */
+		self->size = self->pos;
+		self->eoff = off;
+		self->echunk = chunk;
+	}
 }
 
 void s2p_write_str(
