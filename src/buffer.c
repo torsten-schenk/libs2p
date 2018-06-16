@@ -769,6 +769,21 @@ uint64_t s2p_read_u64(
 	return be64toh(v);
 }
 
+int s2p_read_done(
+		s2p_read_t *self)
+{
+	int error = self->error;
+	self->error = 0;
+	s2p_read_update(self);
+
+	if(error) {
+		errno = error;
+		return -1;
+	}
+	else
+		return 0;
+}
+
 void s2p_read_abort(
 		s2p_read_t *self)
 {
@@ -795,7 +810,7 @@ void s2p_read_commit(
 	}
 	self->buffer->rchunk = chunk;
 	self->buffer->roff = off;
-	__atomic_fetch_sub(&self->buffer->fill, pos, __ATOMIC_ACQ_REL);
+	__atomic_fetch_sub(&self->buffer->fill, self->pos, __ATOMIC_ACQ_REL);
 }
 
 #ifdef TESTING

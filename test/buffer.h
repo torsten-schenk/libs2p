@@ -602,30 +602,33 @@ static void test2_commit()
 	CU_ASSERT_EQUAL(((testpool_t*)pool4)->n_alloc, 0);
 }
 
-static void assert_wpos(
-		s2p_write_t *self,
-		size_t pos)
-{
-	size_t n = pos;
-	s2p_chunk_t *chunk = self->buffer->wchunk;
-	size_t off = self->buffer->woff;
-	CU_ASSERT_EQUAL(pos, self->pos);
-	CU_ASSERT(self->pos <= self->size);
-	while(n) {
-		size_t cur = S2P_MIN(n, chunk->owner->size - off);
-		n -= cur;
-		off += cur;
-		if(off == chunk->owner->size) {
-			chunk = chunk->next;
-			off = 0;
-		}
-	}
-	CU_ASSERT_PTR_EQUAL(self->chunk, chunk);
-	CU_ASSERT_EQUAL(self->off, off);
-	s2p_write_update(self);
-	CU_ASSERT_EQUAL(self->n, S2P_MIN(self->size - self->pos, chunk->owner->size - off));
-	CU_ASSERT_PTR_EQUAL(self->di, chunk->data + off);
-}
+#define ASSERT_WPOS(SELF, POS) \
+	do {\
+		size_t n = POS; \
+		s2p_chunk_t *chunk = (SELF)->buffer->wchunk; \
+		size_t off = (SELF)->buffer->woff; \
+		CU_ASSERT_EQUAL(POS, (SELF)->pos); \
+		CU_ASSERT((SELF)->pos <= (SELF)->size); \
+		while(n) { \
+			size_t cur = S2P_MIN(n, chunk->owner->size - off); \
+			n -= cur; \
+			off += cur; \
+			if(off == chunk->owner->size) { \
+				chunk = chunk->next; \
+				off = 0; \
+			} \
+		} \
+		CU_ASSERT_PTR_EQUAL((SELF)->chunk, chunk); \
+		CU_ASSERT_EQUAL((SELF)->off, off); \
+		s2p_write_update((SELF)); \
+		if((SELF)->size - (SELF)->pos > 0) { \
+			CU_ASSERT_EQUAL((SELF)->n, S2P_MIN((SELF)->size - (SELF)->pos, chunk->owner->size - off)); \
+			CU_ASSERT_PTR_EQUAL((SELF)->di, chunk->data + off); \
+		} \
+		else { \
+			CU_ASSERT_EQUAL((SELF)->n, 0); \
+		} \
+	} while(false)
 
 static void assert_chunk_data(
 		s2p_chunk_t *chunk,
@@ -666,7 +669,7 @@ static void test2_seek()
 
 	/* case: |-RR[psu]---| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 0, SEEK_SET), 0);
-	assert_wpos(&write, 0);
+	ASSERT_WPOS(&write, 0);
 	/* case: |-RR[pu]i--| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 1, SEEK_SET), -1);
 	CU_ASSERT_EQUAL(write.pos, 0);
@@ -674,77 +677,77 @@ static void test2_seek()
 	s2p_write_reserve(&write, 1, SEEK_END);
 	/* case: |-RR[ps]u--|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 0, SEEK_SET), 0);
-	assert_wpos(&write, 0);
+	ASSERT_WPOS(&write, 0);
 	/* case: |-RRp[su]--|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 1, SEEK_SET), 0);
-	assert_wpos(&write, 1);
+	ASSERT_WPOS(&write, 1);
 	/* case: |-RRs[pu]--|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 0, SEEK_SET), 0);
-	assert_wpos(&write, 0);
+	ASSERT_WPOS(&write, 0);
 
 	s2p_write_reserve(&write, 3, SEEK_END);
 	/* case: |-RRp..s|u------|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 3, SEEK_SET), 0);
-	assert_wpos(&write, 3);
+	ASSERT_WPOS(&write, 3);
 	/* case: |-RR...p|[su]------|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 4, SEEK_SET), 0);
-	assert_wpos(&write, 4);
+	ASSERT_WPOS(&write, 4);
 	/* case: |-RRs...|[pu]------|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 0, SEEK_SET), 0);
-	assert_wpos(&write, 0);
+	ASSERT_WPOS(&write, 0);
 
 	s2p_write_reserve(&write, 6, SEEK_END);
 	/* case: |-RRp...|......u|i */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 11, SEEK_SET), -1);
-	assert_wpos(&write, 0);
+	ASSERT_WPOS(&write, 0);
 	/* case: |-RRp...|......[su]|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 10, SEEK_SET), 0);
-	assert_wpos(&write, 10);
+	ASSERT_WPOS(&write, 10);
 	/* case: |-RR...s|......[pu]|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 3, SEEK_SET), 0);
-	assert_wpos(&write, 3);
+	ASSERT_WPOS(&write, 3);
 	/* case: |-RR...p|...s..u|*/
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 7, SEEK_SET), 0);
-	assert_wpos(&write, 7);
+	ASSERT_WPOS(&write, 7);
 
 	s2p_write_reserve(&write, 7, SEEK_END);
 	/* case: |-RR....|...p...|......u|i */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 18, SEEK_SET), -1);
-	assert_wpos(&write, 7);
+	ASSERT_WPOS(&write, 7);
 	/* case: |-RR..s.|...p...|......u| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 2, SEEK_SET), 0);
-	assert_wpos(&write, 2);
+	ASSERT_WPOS(&write, 2);
 	/* case: |-RR..p.|.......|..s...u| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 13, SEEK_SET), 0);
-	assert_wpos(&write, 13);
+	ASSERT_WPOS(&write, 13);
 	/* case: |-RR....|...s...|..p...u| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 7, SEEK_SET), 0);
-	assert_wpos(&write, 7);
+	ASSERT_WPOS(&write, 7);
 	/* case: |-RR....|...p...|......[su]| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 17, SEEK_SET), 0);
-	assert_wpos(&write, 17);
+	ASSERT_WPOS(&write, 17);
 	/* case: |-RR..s.|.......|......[pu]| */
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 2, SEEK_SET), 0);
-	assert_wpos(&write, 2);
+	ASSERT_WPOS(&write, 2);
 
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 0, SEEK_END), 0);
-	assert_wpos(&write, 17);
+	ASSERT_WPOS(&write, 17);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, -2, SEEK_END), 0);
-	assert_wpos(&write, 15);
+	ASSERT_WPOS(&write, 15);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, -4, SEEK_END), 0);
-	assert_wpos(&write, 13);
+	ASSERT_WPOS(&write, 13);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 3, SEEK_CUR), 0);
-	assert_wpos(&write, 16);
+	ASSERT_WPOS(&write, 16);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, -10, SEEK_CUR), 0);
-	assert_wpos(&write, 6);
+	ASSERT_WPOS(&write, 6);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, -6, SEEK_CUR), 0);
-	assert_wpos(&write, 0);
+	ASSERT_WPOS(&write, 0);
 
 	s2p_write_seek(&write, 6, SEEK_SET);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, -7, SEEK_CUR), -1);
-	assert_wpos(&write, 6);
+	ASSERT_WPOS(&write, 6);
 	CU_ASSERT_EQUAL(s2p_write_seek(&write, 1, SEEK_END), -1);
-	assert_wpos(&write, 6);
+	ASSERT_WPOS(&write, 6);
 
 	destroy_buffer(&buffer);
 }
@@ -761,50 +764,377 @@ static void test2_data()
 	s2p_write_str(&write, "01");
 	CU_ASSERT_EQUAL(write.error, 0);
 	CU_ASSERT_EQUAL(write.size, 2);
-	assert_wpos(&write, 2);
+	ASSERT_WPOS(&write, 2);
 	assert_chunk_data(buffer.rchunk, " ab01  ", NULL);
 	s2p_write_str(&write, "23");
 	assert_chunk_data(buffer.rchunk, " ab0123", "       ", NULL);
 	s2p_write_str(&write, "4567");
 	CU_ASSERT_EQUAL(write.size, 8);
-	assert_wpos(&write, 8);
+	ASSERT_WPOS(&write, 8);
 	assert_chunk_data(buffer.rchunk, " ab0123", "4567   ", NULL);
 	s2p_write_str(&write, "89abcdef");
 	CU_ASSERT_EQUAL(write.size, 16);
-	assert_wpos(&write, 16);
+	ASSERT_WPOS(&write, 16);
 	assert_chunk_data(buffer.rchunk, " ab0123", "456789a", "bcdef  ", NULL);
 	s2p_write_str(&write, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
 	CU_ASSERT_EQUAL(write.size, 42);
-	assert_wpos(&write, 42);
+	ASSERT_WPOS(&write, 42);
 	assert_chunk_data(buffer.rchunk, " ab0123", "456789a", "bcdefAB", "CDEFGHI", "JKLMNOP", "QRSTUVW", "XYZ    ", NULL);
 
 	s2p_write_seek(&write, 3, SEEK_SET);
 	s2p_write_str(&write, "[]");
 	CU_ASSERT_EQUAL(write.size, 42);
-	assert_wpos(&write, 5);
+	ASSERT_WPOS(&write, 5);
 	assert_chunk_data(buffer.rchunk, " ab012[", "]56789a", "bcdefAB", "CDEFGHI", "JKLMNOP", "QRSTUVW", "XYZ    ", NULL);
 
 	s2p_write_seek(&write, 4, SEEK_SET);
 	s2p_write_u8(&write, 0x67);
-	assert_wpos(&write, 5);
+	ASSERT_WPOS(&write, 5);
 	s2p_write_u16(&write, 0x6869);
-	assert_wpos(&write, 7);
+	ASSERT_WPOS(&write, 7);
 	s2p_write_u32(&write, 0x6a6b6c6d);
-	assert_wpos(&write, 11);
+	ASSERT_WPOS(&write, 11);
 	s2p_write_u64(&write, 0x6e6f707172737475);
-	assert_wpos(&write, 19);
+	ASSERT_WPOS(&write, 19);
 
 	assert_chunk_data(buffer.rchunk, " ab012[", "ghijklm", "nopqrst", "uDEFGHI", "JKLMNOP", "QRSTUVW", "XYZ    ", NULL);
 
 	s2p_write_seek(&write, 4, SEEK_SET);
 	s2p_write_set(&write, 0x2e, 24);
 	CU_ASSERT_EQUAL(write.size, 42);
-	assert_wpos(&write, 28);
+	ASSERT_WPOS(&write, 28);
 
 	s2p_write_set(&write, 0x2d, 20);
 	CU_ASSERT_EQUAL(write.size, 48);
-	assert_wpos(&write, 48);
+	ASSERT_WPOS(&write, 48);
 	assert_chunk_data(buffer.rchunk, " ab012[", ".......", ".......", ".......", "...----", "-------", "-------", "--     ", NULL);
+
+	destroy_buffer(&buffer);
+}
+
+static int test3_init()
+{
+	pool4 = testpool_new(4);
+	if(!pool4)
+		goto error_1;
+	pool7 = testpool_new(7);
+	if(!pool7)
+		goto error_2;
+	return CUE_SUCCESS;
+
+error_2:
+	testpool_destroy(pool4);
+error_1:
+	return CUE_SINIT_FAILED;
+}
+
+static int test3_cleanup()
+{
+	testpool_destroy(pool7);
+	testpool_destroy(pool4);
+	return CUE_SUCCESS;
+}
+
+static void test3_begin()
+{
+	s2p_buffer_t buffer;
+	s2p_read_t read;
+
+	/* null buffer */
+	make_buffer(&buffer, pool7, 0, "", true);
+	CU_ASSERT_EQUAL(s2p_read_begin(&read, &buffer), 0);
+	CU_ASSERT_EQUAL(read.size, 0);
+	CU_ASSERT_EQUAL(read.pos, 0);
+	destroy_buffer(&buffer);
+
+	/* empty buffer */
+	make_buffer(&buffer, pool7, 0, "", false);
+	CU_ASSERT_EQUAL(s2p_read_begin(&read, &buffer), 0);
+	CU_ASSERT_EQUAL(read.size, 0);
+	CU_ASSERT_EQUAL(read.pos, 0);
+	destroy_buffer(&buffer);
+
+	/* single-chunk buffer */
+	make_buffer(&buffer, pool7, 1, "ABC", false);
+	CU_ASSERT_EQUAL(s2p_read_begin(&read, &buffer), 0);
+	CU_ASSERT_EQUAL(read.size, 3);
+	CU_ASSERT_EQUAL(read.pos, 0);
+	destroy_buffer(&buffer);
+
+	/* multi-chunk buffer */
+	make_buffer(&buffer, pool7, 1, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", false);
+	CU_ASSERT_EQUAL(s2p_read_begin(&read, &buffer), 0);
+	CU_ASSERT_EQUAL(read.size, 26);
+	CU_ASSERT_EQUAL(read.pos, 0);
+	destroy_buffer(&buffer);
+}
+
+#define ASSERT_RPOS(SELF, POS) \
+	do {\
+		size_t n = POS; \
+		s2p_chunk_t *chunk = (SELF)->buffer->rchunk; \
+		size_t off = (SELF)->buffer->roff; \
+		CU_ASSERT_EQUAL(POS, (SELF)->pos); \
+		CU_ASSERT((SELF)->pos <= (SELF)->size); \
+		while(n) { \
+			size_t cur = S2P_MIN(n, chunk->owner->size - off); \
+			n -= cur; \
+			off += cur; \
+			if(off == chunk->owner->size) { \
+				chunk = chunk->next; \
+				off = 0; \
+			} \
+		} \
+		CU_ASSERT_PTR_EQUAL((SELF)->chunk, chunk); \
+		CU_ASSERT_EQUAL((SELF)->off, off); \
+		s2p_read_update((SELF)); \
+		if((SELF)->size - (SELF)->pos > 0) { \
+			CU_ASSERT_EQUAL((SELF)->n, S2P_MIN((SELF)->size - (SELF)->pos, chunk->owner->size - off)); \
+			CU_ASSERT_PTR_EQUAL((SELF)->si, chunk->data + off); \
+		} \
+		else { \
+			CU_ASSERT_EQUAL((SELF)->n, 0); \
+		} \
+	} while(false)
+
+static void test3_seek()
+{
+	s2p_buffer_t buffer;
+	s2p_read_t read;
+
+	make_buffer(&buffer, pool7, 3, "", true);
+	s2p_read_begin(&read, &buffer);
+	/* case: |---[psu]---| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 0, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 0);
+	/* case: |---[pu]i--| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 1, SEEK_SET), -1);
+	ASSERT_RPOS(&read, 0);
+
+	destroy_buffer(&buffer);
+	
+	make_buffer(&buffer, pool7, 3, "A", true);
+	s2p_read_begin(&read, &buffer);
+	/* case: |---[ps]u--|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 0, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 0);
+	/* case: |---p[su]--|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 1, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 1);
+	/* case: |---s[pu]--|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 0, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 0);
+
+	destroy_buffer(&buffer);
+
+	make_buffer(&buffer, pool7, 3, "ABCD", true);
+	s2p_read_begin(&read, &buffer);
+	/* case: |---p..s|u------|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 3, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 3);
+	/* case: |---...p|[su]------|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 4, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 4);
+	/* case: |---s...|[pu]------|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 0, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 0);
+
+	destroy_buffer(&buffer);
+
+	make_buffer(&buffer, pool7, 3, "ABCDEFGHIJ", true);
+	s2p_read_begin(&read, &buffer);
+	/* case: |---p...|......u|i */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 11, SEEK_SET), -1);
+	ASSERT_RPOS(&read, 0);
+	/* case: |---p...|......[su]|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 10, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 10);
+	/* case: |---...s|......[pu]|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 3, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 3);
+	/* case: |---...p|...s..u|*/
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 7, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 7);
+
+	destroy_buffer(&buffer);
+
+	make_buffer(&buffer, pool7, 3, "ABCDEFGHIJKLMNOPQ", true);
+	s2p_read_begin(&read, &buffer);
+	/* case: |---....|...p...|......u|i */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 18, SEEK_SET), -1);
+	ASSERT_RPOS(&read, 0);
+	/* case: |---..s.|...p...|......u| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 2, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 2);
+	/* case: |---..p.|.......|..s...u| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 13, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 13);
+	/* case: |---....|...s...|..p...u| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 7, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 7);
+	/* case: |---....|...p...|......[su]| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 17, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 17);
+	/* case: |---..s.|.......|......[pu]| */
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 2, SEEK_SET), 0);
+	ASSERT_RPOS(&read, 2);
+
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 0, SEEK_END), 0);
+	ASSERT_RPOS(&read, 17);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, -2, SEEK_END), 0);
+	ASSERT_RPOS(&read, 15);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, -4, SEEK_END), 0);
+	ASSERT_RPOS(&read, 13);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 3, SEEK_CUR), 0);
+	ASSERT_RPOS(&read, 16);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, -10, SEEK_CUR), 0);
+	ASSERT_RPOS(&read, 6);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, -6, SEEK_CUR), 0);
+	ASSERT_RPOS(&read, 0);
+
+	s2p_read_seek(&read, 6, SEEK_SET);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, -7, SEEK_CUR), -1);
+	ASSERT_RPOS(&read, 6);
+	CU_ASSERT_EQUAL(s2p_read_seek(&read, 1, SEEK_END), -1);
+	ASSERT_RPOS(&read, 6);
+
+	destroy_buffer(&buffer);
+}
+
+static void test3_abort()
+{
+	s2p_buffer_t buffer;
+	s2p_read_t read;
+	s2p_chunk_t *chunk;
+
+	make_buffer(&buffer, pool7, 3, "ABCDEFGHIJKLMNOPQ", true);
+	chunk = buffer.rchunk;
+	s2p_read_begin(&read, &buffer);
+	s2p_read_seek(&read, 1, SEEK_SET);
+	s2p_read_abort(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 3);
+	CU_ASSERT_EQUAL(buffer.fill, 17);
+
+	s2p_read_begin(&read, &buffer);
+	s2p_read_seek(&read, 6, SEEK_SET);
+	s2p_read_abort(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 3);
+	CU_ASSERT_EQUAL(buffer.fill, 17);
+
+	s2p_read_begin(&read, &buffer);
+	s2p_read_seek(&read, 0, SEEK_END);
+	s2p_read_abort(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 3);
+	CU_ASSERT_EQUAL(buffer.fill, 17);
+
+	destroy_buffer(&buffer);
+}
+
+static void test3_commit()
+{
+	s2p_buffer_t buffer;
+	s2p_read_t read;
+	s2p_chunk_t *chunk;
+
+	/* buffer: |---....|.......|......-| */
+	make_buffer(&buffer, pool7, 3, "ABCDEFGHIJKLMNOPQ", true);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 3); /* this is just our reference */
+	chunk = buffer.rchunk;
+	s2p_read_begin(&read, &buffer);
+	s2p_read_commit(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 3);
+	CU_ASSERT_EQUAL(buffer.fill, 17);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 3);
+
+	s2p_read_begin(&read, &buffer);
+	s2p_read_seek(&read, 1, SEEK_SET);
+	s2p_read_commit(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 4);
+	CU_ASSERT_EQUAL(buffer.fill, 16);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 3);
+
+	/* buffer: |----...|.......|......-| */
+
+	chunk = chunk->next;
+	s2p_read_begin(&read, &buffer);
+	s2p_read_seek(&read, 5, SEEK_SET);
+	s2p_read_commit(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 2);
+	CU_ASSERT_EQUAL(buffer.fill, 11);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 2);
+
+	/* buffer: |--.....|......-| */
+
+	chunk = chunk->next;
+	s2p_read_begin(&read, &buffer);
+	s2p_read_seek(&read, 0, SEEK_END);
+	s2p_read_commit(&read);
+	CU_ASSERT_PTR_EQUAL(buffer.rchunk, chunk);
+	CU_ASSERT_EQUAL(buffer.roff, 6);
+	CU_ASSERT_EQUAL(buffer.fill, 0);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 1);
+
+	s2p_buffer_destroy(&buffer);
+	CU_ASSERT_EQUAL(((testpool_t*)pool7)->n_alloc, 0);
+}
+
+static void test3_data()
+{
+	s2p_buffer_t buffer;
+	s2p_read_t read;
+	unsigned char tmp[27];
+	const char *data = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+	/* buffer: |---ABCD|EFGHIJK|LMNOPQR|STUVWXY|Z------| */
+	make_buffer(&buffer, pool7, 3, data, true);
+	s2p_read_begin(&read, &buffer);
+	s2p_read_data(&read, tmp, 1);
+	CU_ASSERT_EQUAL(memcmp(tmp, data + 0, 1), 0);
+	CU_ASSERT_EQUAL(read.error, 0);
+	ASSERT_RPOS(&read, 1);
+
+	s2p_read_data(&read, tmp, 7);
+	CU_ASSERT_EQUAL(memcmp(tmp, data + 1, 7), 0);
+	CU_ASSERT_EQUAL(read.error, 0);
+	ASSERT_RPOS(&read, 8);
+
+	s2p_read_data(&read, tmp, 18);
+	CU_ASSERT_EQUAL(memcmp(tmp, data + 8, 18), 0);
+	CU_ASSERT_EQUAL(read.error, 0);
+	ASSERT_RPOS(&read, 26);
+	CU_ASSERT_EQUAL(s2p_read_done(&read), 0);
+
+	s2p_read_data(&read, tmp, 1);
+	CU_ASSERT_EQUAL(read.error, EOVERFLOW);
+	ASSERT_RPOS(&read, 26);
+	CU_ASSERT_EQUAL(s2p_read_done(&read), -1);
+	CU_ASSERT_EQUAL(read.error, 0);
+
+	s2p_read_seek(&read, 1, SEEK_SET);
+	CU_ASSERT_EQUAL(s2p_read_u8(&read), 0x42);
+	CU_ASSERT_EQUAL(s2p_read_u16(&read), 0x4344);
+	CU_ASSERT_EQUAL(s2p_read_u32(&read), 0x45464748);
+	CU_ASSERT_EQUAL(s2p_read_u64(&read), 0x494a4b4c4d4e4f50);
+
+	destroy_buffer(&buffer);
+
+	make_buffer(&buffer, pool7, 3, "", true);
+	s2p_read_begin(&read, &buffer);
+	s2p_read_data(&read, tmp, 0);
+	CU_ASSERT_EQUAL(read.error, 0);
+	ASSERT_RPOS(&read, 0);
+
+	s2p_read_data(&read, tmp, 1);
+	CU_ASSERT_EQUAL(read.error, EOVERFLOW);
+	ASSERT_RPOS(&read, 0);
+
+	destroy_buffer(&buffer);
 }
 
 static int setup_tests()
@@ -828,6 +1158,13 @@ static int setup_tests()
 		ADD_TEST("s2p_write_commit", test2_commit);
 		ADD_TEST("s2p_write_seek + implicit s2p_write_update", test2_seek);
 		ADD_TEST("s2p_write_set + s2p_write_data + s2p_write_done", test2_data);
+	END_SUITE;
+	BEGIN_SUITE("Buffer read", test3_init, test3_cleanup);
+		ADD_TEST("s2p_read_begin", test3_begin);
+		ADD_TEST("s2p_read_seek + implicit s2p_read_update", test3_seek);
+		ADD_TEST("s2p_read_abort", test3_abort);
+		ADD_TEST("s2p_read_commit", test3_commit);
+		ADD_TEST("s2p_read_data + s2p_read_done", test3_data);
 	END_SUITE;
 
 	return CUE_SUCCESS;

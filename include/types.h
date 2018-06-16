@@ -237,6 +237,9 @@ uint32_t s2p_read_u32(
 uint64_t s2p_read_u64(
 		s2p_read_t *self);
 
+int s2p_read_done(
+		s2p_read_t *self);
+
 /* node: 'self' becomes uninitialized after abort() or commit() */
 void s2p_read_abort(
 		s2p_read_t *self);
